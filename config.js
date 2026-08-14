@@ -13,10 +13,10 @@
 
 const SUPABASE_CONFIG = {
     // URL de votre projet Supabase (ex: https://xxxxx.supabase.co)
-    SUPABASE_URL: 'YOUR_SUPABASE_URL',
+    SUPABASE_URL: 'https://woiayvybuqbnppqfyysx.supabase.co',
     
     // Clé anon publique (safe to use in frontend)
-    SUPABASE_ANON_KEY: 'YOUR_SUPABASE_ANON_KEY'
+    SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndvaWF5dnlidXFibnBwcWZ5eXN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3NDA3MzgsImV4cCI6MjEwMjMxNjczOH0.qbeSJh3UFyIvNOqR2vvUQ0QEXgszhLlsGDZZA6tP8Oo'
 };
 
 // Export pour utilisation dans d'autres fichiers
