@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="description" content="DuoQuest - Apprendre, jouer et rester proches">
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    
+    <!-- Icônes PWA -->
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+    
+    <title>DuoQuest</title>
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <!-- Écran de chargement -->
+    <div id="loading-screen" class="screen active">
+        <div class="loading-content">
+            <div class="logo">🎮</div>
+            <h1>DuoQuest</h1>
+            <p class="loading-text">Chargement...</p>
+        </div>
+    </div>
+
+    <!-- Écran d'authentification -->
+    <div id="auth-screen" class="screen">
+        <div class="auth-container">
+            <div class="logo-large">🎮</div>
+            <h1>DuoQuest</h1>
+            <p class="subtitle">Apprendre, jouer et rester proches</p>
+            
+            <!-- Formulaire de connexion -->
+            <form id="login-form" class="auth-form">
+                <h2>Connexion</h2>
+                <div class="form-group">
+                    <label for="login-email">Email</label>
+                    <input type="email" id="login-email" required autocomplete="email">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Mot de passe</label>
+                    <input type="password" id="login-password" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="btn btn-primary btn-full">Se connecter</button>
+                <p class="auth-switch">
+                    Pas encore de compte ? 
+                    <a href="#" id="show-signup">S'inscrire</a>
+                </p>
+            </form>
+            
+            <!-- Formulaire d'inscription -->
+            <form id="signup-form" class="auth-form hidden">
+                <h2>Inscription</h2>
+                <div class="form-group">
+                    <label for="signup-email">Email</label>
+                    <input type="email" id="signup-email" required autocomplete="email">
+                </div>
+                <div class="form-group">
+                    <label for="signup-password">Mot de passe</label>
+                    <input type="password" id="signup-password" required autocomplete="new-password" minlength="6">
+                </div>
+                <button type="submit" class="btn btn-primary btn-full">S'inscrire</button>
+                <p class="auth-switch">
+                    Déjà un compte ? 
+                    <a href="#" id="show-login">Se connecter</a>
+                </p>
+            </form>
+            
+            <div id="auth-error" class="error-message hidden"></div>
+        </div>
+    </div>
+
+    <!-- Écran d'accueil -->
+    <div id="home-screen" class="screen">
+        <header class="app-header">
+            <div class="header-left">
+                <span class="user-greeting">Bonjour, <span id="user-name">Utilisateur</span></span>
+            </div>
+            <button id="logout-btn" class="btn btn-secondary btn-small">Déconnexion</button>
+        </header>
+        
+        <main class="app-main">
+            <!-- Section Couple -->
+            <section id="couple-section" class="card">
+                <h2>❤️ Espace Couple</h2>
+                <div id="couple-info" class="hidden">
+                    <p><strong>Couple :</strong> <span id="couple-name"></span></p>
+                    <p><strong>Code d'invitation :</strong> <span id="invite-code" class="invite-code"></span></p>
+                    <button id="copy-code-btn" class="btn btn-secondary btn-small">Copier le code</button>
+                </div>
+                <div id="no-couple" class="hidden">
+                    <p>Aucun couple actif</p>
+                    <div class="button-row">
+                        <button id="create-couple-btn" class="btn btn-primary">Créer un couple</button>
+                        <button id="join-couple-btn" class="btn btn-secondary">Rejoindre un couple</button>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Section Packs -->
+            <section id="packs-section" class="card">
+                <h2>📚 Packs Disponibles</h2>
+                <div id="packs-list" class="packs-grid">
+                    <!-- Les packs seront chargés ici dynamiquement -->
+                </div>
+            </section>
+            
+            <!-- Section Modes de Jeu -->
+            <section id="game-modes-section" class="card">
+                <h2>🎮 Modes de Jeu</h2>
+                <div class="game-modes-grid">
+                    <button class="game-mode-card" data-mode="quiz_duel">
+                        <span class="mode-icon">⚔️</span>
+                        <h3>Quiz Duel</h3>
+                        <p>Affrontez-vous sur des questions</p>
+                    </button>
+                    <button class="game-mode-card" data-mode="blitz">
+                        <span class="mode-icon">⚡</span>
+                        <h3>Blitz 60s</h3>
+                        <p>Un maximum de questions en 60 secondes</p>
+                    </button>
+                    <button class="game-mode-card" data-mode="devinette">
+                        <span class="mode-icon">❓</span>
+                        <h3>Devinette</h3>
+                        <p>Devinez la bonne réponse</p>
+                    </button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Écran de Jeu -->
+    <div id="game-screen" class="screen">
+        <header class="game-header">
+            <button id="back-home-btn" class="btn btn-secondary btn-small">← Retour</button>
+            <div class="game-info">
+                <span id="game-mode-display">Quiz Duel</span>
+                <span id="game-timer" class="timer hidden">⏱️ 15s</span>
+            </div>
+            <button id="toggle-chat-btn" class="btn btn-secondary btn-small">💬</button>
+        </header>
+        
+        <main class="game-main">
+            <!-- Scores -->
+            <div class="scores-container">
+                <div class="player-score" id="player1-score">
+                    <span class="player-name">Joueur 1</span>
+                    <span class="score-value">0</span>
+                </div>
+                <div class="player-score" id="player2-score">
+                    <span class="player-name">Joueur 2</span>
+                    <span class="score-value">0</span>
+                </div>
+            </div>
+            
+            <!-- Question -->
+            <div id="question-container" class="card question-card">
+                <div class="question-header">
+                    <span class="pack-badge" id="question-pack">Pack</span>
+                    <span class="difficulty-badge" id="question-difficulty">Difficulté</span>
+                </div>
+                <h3 id="question-text" class="question-text">Chargement de la question...</h3>
+                <div id="options-container" class="options-container">
+                    <!-- Les options seront générées ici -->
+                </div>
+                <div id="feedback-container" class="feedback-container hidden">
+                    <p id="feedback-result" class="feedback-result"></p>
+                    <p id="feedback-explanation" class="feedback-explanation"></p>
+                </div>
+            </div>
+            
+            <!-- Emojis rapides -->
+            <div class="emoji-bar">
+                <button class="emoji-btn" data-emoji="❤️">❤️</button>
+                <button class="emoji-btn" data-emoji="👏">👏</button>
+                <button class="emoji-btn" data-emoji="😂">😂</button>
+                <button class="emoji-btn" data-emoji="🔥">🔥</button>
+                <button class="emoji-btn" data-emoji="😮">😮</button>
+                <button class="emoji-btn" data-emoji="🚁">🚁</button>
+                <button class="emoji-btn" data-emoji="🪨">🪨</button>
+                <button class="emoji-btn" data-emoji="🧵">🧵</button>
+                <button class="emoji-btn" data-emoji="🎉">🎉</button>
+            </div>
+        </main>
+        
+        <!-- Panneau de Chat -->
+        <aside id="chat-panel" class="chat-panel hidden">
+            <div class="chat-header">
+                <h4>💬 Chat</h4>
+                <button id="close-chat-btn" class="btn btn-secondary btn-small">×</button>
+            </div>
+            <div id="chat-messages" class="chat-messages">
+                <!-- Les messages apparaîtront ici -->
+            </div>
+            <form id="chat-form" class="chat-form">
+                <input type="text" id="chat-input" placeholder="Votre message..." autocomplete="off">
+                <button type="submit" class="btn btn-primary">Envoyer</button>
+            </form>
+        </aside>
+    </div>
+
+    <!-- Modal de création/join couple -->
+    <div id="couple-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3 id="modal-title">Gestion du Couple</h3>
+            <form id="create-couple-form" class="hidden">
+                <div class="form-group">
+                    <label for="couple-name-input">Nom du couple</label>
+                    <input type="text" id="couple-name-input" required>
+                </div>
+                <div class="button-row">
+                    <button type="button" id="cancel-create-btn" class="btn btn-secondary">Annuler</button>
+                    <button type="submit" class="btn btn-primary">Créer</button>
+                </div>
+            </form>
+            <form id="join-couple-form" class="hidden">
+                <div class="form-group">
+                    <label for="invite-code-input">Code d'invitation</label>
+                    <input type="text" id="invite-code-input" required placeholder="Entrez le code à 12 caractères">
+                </div>
+                <div class="button-row">
+                    <button type="button" id="cancel-join-btn" class="btn btn-secondary">Annuler</button>
+                    <button type="submit" class="btn btn-primary">Rejoindre</button>
+                </div>
+            </form>
+            <div id="modal-error" class="error-message hidden"></div>
+        </div>
+    </div>
+
+    <!-- Avertissement H125 -->
+    <div id="h125-warning" class="warning-banner hidden">
+        ⚠️ <strong>Contenu pédagogique H125</strong> - Ne remplace pas les documents officiels, le manuel de vol ou une formation certifiée.
+        <button id="dismiss-warning" class="btn btn-small">OK</button>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/config.js"></script>
+    <script src="/app.js"></script>
+</body>
+</html>
