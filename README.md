@@ -56,6 +56,10 @@ duoquest/
 
 ## 🚀 Installation et Configuration
 
+> ✅ **Supabase déjà configuré et application déployée !**
+> 
+> Les étapes ci-dessous sont fournies à titre de référence pour la documentation du projet.
+
 ### Étape 1 : Créer un projet Supabase
 
 1. Rendez-vous sur [https://supabase.com](https://supabase.com)
@@ -131,40 +135,9 @@ Pour tester plus rapidement sans vérifier les emails :
 
 ## 🌐 Déploiement
 
-### Option A : Netlify (Recommandé - Le plus simple)
-
-1. Créez un compte sur [https://netlify.com](https://netlify.com)
-2. Glissez-déposez le dossier du projet sur la zone de drop
-3. Ou connectez votre repository GitHub
-4. L'application est déployée automatiquement !
-
-**Configuration recommandée :**
-- Build command : (laisser vide)
-- Publish directory : `/` (racine)
-
-### Option B : Vercel
-
-1. Créez un compte sur [https://vercel.com](https://vercel.com)
-2. Installez Vercel CLI : `npm i -g vercel`
-3. Dans le dossier du projet : `vercel`
-4. Suivez les instructions
-
-### Option C : GitHub Pages
-
-1. Créez un repository GitHub
-2. Push les fichiers du projet
-3. Allez dans **Settings** > **Pages**
-4. Sélectionnez la branche `main` et le dossier `/ (root)`
-5. Votre site sera disponible sur `https://votre-username.github.io/duoquest`
-
-### Option D : Cloudflare Pages
-
-1. Créez un compte sur [https://pages.cloudflare.com](https://pages.cloudflare.com)
-2. Connectez votre repository GitHub
-3. Laissez les paramètres par défaut
-4. Déployez !
-
----
+> ✅ **Application déjà déployée !**
+> 
+> Les options ci-dessous sont fournies à titre de référence.
 
 ## 📲 Installation sur Android (PWA)
 
@@ -358,11 +331,12 @@ Pour activer les logs détaillés dans Supabase :
 
 ## 🎉 Prêt à jouer !
 
-Une fois toutes les étapes complétées :
-1. Déployez l'application
-2. Partagez l'URL avec votre partenaire
-3. Installez l'application sur vos téléphones Android
-4. Créez ou rejoignez un couple
-5. Lancez votre première partie !
+Votre application DuoQuest est **déjà configurée et déployée** !
+
+Pour commencer :
+1. Partagez l'URL de l'application avec votre partenaire
+2. Installez l'application sur vos téléphones Android (PWA)
+3. Créez ou rejoignez un couple
+4. Lancez votre première partie !
 
 **Bon jeu et amusez-vous bien ! 🚁🪨💻🧵❤️**
