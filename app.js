@@ -830,16 +830,47 @@ async function finishBlitz() {
 // ============================================
 // SCORES & RÉSULTATS
 // ============================================
+/**
+ * Récupère une map { userId: display_name } pour une liste d'utilisateurs.
+ * (On évite la jointure PostgREST profiles(...) qui n'est pas résolue car
+ *  les FK user_id/sender_id pointent vers auth.users et non vers profiles.)
+ */
+async function getProfilesMap(userIds) {
+    const ids = [...new Set(userIds)].filter(Boolean);
+    if (!ids.length) return {};
+    try {
+        const { data } = await AppState.supabase
+            .from('profiles')
+            .select('id, display_name')
+            .in('id', ids);
+        const map = {};
+        (data || []).forEach((p) => { map[p.id] = p.display_name || ''; });
+        return map;
+    } catch {
+        return {};
+    }
+}
+
+/** Résout le nom d'affichage d'un utilisateur. */
+async function resolveName(userId) {
+    if (!userId) return 'Inconnu';
+    if (userId === AppState.user?.id) return AppState.profile?.display_name || 'Vous';
+    const map = await getProfilesMap([userId]);
+    return map[userId] || 'Inconnu';
+}
+
 async function renderScores() {
     if (!AppState.gameSession) return;
     try {
         const { data, error } = await AppState.supabase
             .from('session_players')
-            .select('*, profiles(display_name)')
+            .select('*')
             .eq('session_id', AppState.gameSession.id)
             .order('joined_at', { ascending: true });
 
         if (error) throw error;
+
+        const names = await getProfilesMap((data || []).map((p) => p.user_id));
 
         for (let i = 1; i <= 2; i++) {
             const el = $(`player${i}-score`);
@@ -847,8 +878,8 @@ async function renderScores() {
             const player = (data || [])[i - 1];
             if (player) {
                 const isMe = player.user_id === AppState.user.id;
-                el.querySelector('.player-name').textContent =
-                    (isMe ? 'Vous · ' : '') + (player.profiles?.display_name || 'Joueur ' + i);
+                const name = names[player.user_id] || (isMe ? 'moi' : 'Joueur ' + i);
+                el.querySelector('.player-name').textContent = isMe ? ('Vous · ' + name) : name;
                 el.querySelector('.score-value').textContent = player.score || 0;
             } else {
                 el.querySelector('.player-name').textContent = i === 1 ? 'Vous' : 'Partenaire';
@@ -865,14 +896,16 @@ async function showResults() {
     try {
         const { data, error } = await AppState.supabase
             .from('session_players')
-            .select('*, profiles(display_name)')
+            .select('*')
             .eq('session_id', AppState.gameSession.id)
             .order('score', { ascending: false });
 
         if (error) throw error;
 
+        const names = await getProfilesMap((data || []).map((p) => p.user_id));
+
         const rows = (data || []).map((p) => ({
-            name: p.profiles?.display_name || 'Joueur',
+            name: names[p.user_id] || (p.user_id === AppState.user.id ? 'Vous' : 'Joueur'),
             score: p.score || 0,
             correct: p.correct_answers_count || 0,
             answers: p.answers_count || 0,
@@ -968,8 +1001,9 @@ function setupRealtime(session) {
                 schema: 'public',
                 table: 'chat_messages',
                 filter: `couple_id=eq.${AppState.couple.id}`,
-            }, (payload) => {
-                addChatMessage(payload.new);
+            }, async (payload) => {
+                const senderName = await resolveName(payload.new.sender_id);
+                addChatMessage(payload.new, true, senderName);
             })
             .subscribe();
         AppState.channels.push(chatChannel);
@@ -1015,27 +1049,31 @@ async function loadChatMessages() {
     try {
         const { data, error } = await AppState.supabase
             .from('chat_messages')
-            .select('*, profiles(display_name)')
+            .select('*')
             .eq('couple_id', AppState.couple.id)
             .order('created_at', { ascending: false })
             .limit(50);
         if (error) throw error;
 
+        const names = await getProfilesMap((data || []).map((m) => m.sender_id));
+
         const container = $('chat-messages');
         container.innerHTML = '';
-        (data || []).reverse().forEach((msg) => addChatMessage(msg, false));
+        (data || []).reverse().forEach((msg) => addChatMessage(msg, false, names[msg.sender_id]));
         container.scrollTop = container.scrollHeight;
     } catch (error) {
         console.error('Erreur chargement chat:', error);
     }
 }
 
-function addChatMessage(msg, scroll = true) {
+function addChatMessage(msg, scroll = true, senderName) {
     const container = $('chat-messages');
+    if (!container) return;
+    const name = senderName || msg.profiles?.display_name || (msg.sender_id === AppState.user?.id ? 'Vous' : 'Inconnu');
     const el = document.createElement('div');
     el.className = 'chat-message' + (msg.sender_id === AppState.user?.id ? ' own' : '');
     el.innerHTML = `
-        <div class="chat-sender">${escapeHtml(msg.profiles?.display_name || 'Inconnu')}</div>
+        <div class="chat-sender">${escapeHtml(name)}</div>
         <div class="chat-text">${escapeHtml(msg.message_text)}</div>`;
     container.appendChild(el);
     if (scroll) container.scrollTop = container.scrollHeight;
