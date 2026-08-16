@@ -3,36 +3,21 @@
 
 -- ============================================
 -- PACKS DE CONTENU
+-- (ON CONFLICT DO NOTHING : ré-exécutable sans doublon)
 -- ============================================
 
--- Pack H125 : Hélicoptère H125 (pédagogique uniquement)
 INSERT INTO public.packs (name, slug, description, icon_emoji, color_hex)
-VALUES 
-    ('Hélicoptère H125', 'h125', 'Questions pédagogiques sur l''hélicoptère H125. Ne remplace pas les documents officiels.', '🚁', '#3b82f6');
-
--- Pack Géologie
-INSERT INTO public.packs (name, slug, description, icon_emoji, color_hex)
-VALUES 
-    ('Géologie', 'geologie', 'Découvrez les merveilles de la Terre et des roches.', '🪨', '#10b981');
-
--- Pack Informatique
-INSERT INTO public.packs (name, slug, description, icon_emoji, color_hex)
-VALUES 
-    ('Informatique', 'informatique', 'Programmation, algorithmes et technologies.', '💻', '#8b5cf6');
-
--- Pack Pagnes Tissés
-INSERT INTO public.packs (name, slug, description, icon_emoji, color_hex)
-VALUES 
-    ('Pagnes Tissés Africains', 'pagne', 'L''art du tissage traditionnel africain.', '🧵', '#f59e0b');
-
--- Pack Couple
-INSERT INTO public.packs (name, slug, description, icon_emoji, color_hex)
-VALUES 
-    ('Couple', 'couple', 'Questions fun et romantiques pour se rapprocher.', '❤️', '#ec4899');
+VALUES
+    ('Hélicoptère H125', 'h125', 'Questions pédagogiques sur l''hélicoptère H125. Ne remplace pas les documents officiels.', '🚁', '#3b82f6'),
+    ('Géologie', 'geologie', 'Découvrez les merveilles de la Terre et des roches.', '🪨', '#10b981'),
+    ('Informatique', 'informatique', 'Programmation, algorithmes et technologies.', '💻', '#8b5cf6'),
+    ('Pagnes Tissés Africains', 'pagne', 'L''art du tissage traditionnel africain.', '🧵', '#f59e0b'),
+    ('Couple', 'couple', 'Questions fun et romantiques pour se rapprocher.', '❤️', '#ec4899')
+ON CONFLICT (slug) DO NOTHING;
 
 -- ============================================
 -- QUESTIONS H125 (Pédagogiques - 5 questions)
--- Avertissement: Ces questions sont纯 pédagogiques et ne remplacent pas les documents officiels
+-- Avertissement: Ces questions sont purement pédagogiques et ne remplacent pas les documents officiels
 -- ============================================
 
 INSERT INTO public.questions (pack_id, category, subcategory, type, difficulty, question_text, options, correct_answer, explanation, source_reference, status)

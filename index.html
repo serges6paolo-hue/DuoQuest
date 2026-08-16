@@ -238,6 +238,18 @@
         <button id="dismiss-warning" class="btn btn-small">OK</button>
     </div>
 
+    <!-- Overlay de résultats finaux -->
+    <div id="results-overlay" class="modal hidden">
+        <div class="modal-content results-content">
+            <h3>🏁 Fin de la partie</h3>
+            <div id="results-body"></div>
+            <button id="close-results-btn" class="btn btn-primary btn-full">Retour à l'accueil</button>
+        </div>
+    </div>
+
+    <!-- Toast (notifications temporaires) -->
+    <div id="toast" class="toast hidden"></div>
+
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="./config.js"></script>

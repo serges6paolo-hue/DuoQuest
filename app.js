@@ -1,7 +1,10 @@
 /**
- * DuoQuest - Application JavaScript
- * Logique principale de l'application
+ * DuoQuest - Application JavaScript (vanilla, ES2020+)
+ * Logique principale : auth, couple, packs, jeux, temps réel, chat, emojis.
+ * Tous les commentaires sont en français.
  */
+
+'use strict';
 
 // ============================================
 // ÉTAT GLOBAL
@@ -12,60 +15,152 @@ const AppState = {
     profile: null,
     couple: null,
     selectedPack: null,
+
+    // Jeu
     gameSession: null,
+    mode: null,              // 'quiz_duel' | 'blitz' | 'devinette'
+    questions: [],           // liste ordonnée partagée (seed = session.id)
     currentQuestion: null,
-    questions: [],
     currentRound: 0,
-    timer: null,
+    isHost: false,
+    answeredThisRound: false,
+    advancing: false,        // évite les doubles avancées de round
     timeLeft: 15,
-    chatOpen: false
+    timerInterval: null,
+
+    // Blitz
+    blitzIndex: 0,
+    blitzTimeLeft: 60,
+    blitzTimer: null,
+    blitzEnded: false,
+
+    // Realtime
+    channels: [],
 };
+
+// ============================================
+// PETITS UTILITAIRES
+// ============================================
+const $ = (id) => document.getElementById(id);
+
+/** Échappe le HTML pour éviter les injections XSS (chat, noms). */
+function escapeHtml(str) {
+    return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+}
+
+/** Hash FNV-1a : transforme une chaîne en entier (déterministe). */
+function hashString(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+}
+
+/**
+ * Mélange déterministe (seedé) : les DEUX joueurs obtiennent le même ordre
+ * à partir du même `seed` (l'id de la session). Indispensable pour le duel.
+ */
+function seededShuffle(arr, seedStr) {
+    const a = arr.slice();
+    let seed = hashString(seedStr);
+    for (let i = a.length - 1; i > 0; i--) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; // générateur LCG
+        const j = seed % (i + 1);
+        [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+}
+
+/**
+ * Parse les options : PostgREST renvoie déjà un tableau JSON,
+ * mais on gère aussi le cas où ce serait une chaîne JSON.
+ */
+function parseOptions(raw) {
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+        try { return JSON.parse(raw); } catch { /* ignore */ }
+    }
+    return [];
+}
+
+/** Affiche un petit toast temporaire (remplace les alert()). */
+function toast(message) {
+    const el = $('toast');
+    if (!el) { alert(message); return; }
+    el.textContent = message;
+    el.classList.remove('hidden');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => el.classList.add('hidden'), 2800);
+}
+
+/** Vérifie que config.js a bien été rempli. */
+function isConfigured() {
+    const url = SUPABASE_CONFIG?.SUPABASE_URL || '';
+    const key = SUPABASE_CONFIG?.SUPABASE_ANON_KEY || '';
+    if (!url || !key) return false;
+    if (url.includes('VOTRE') || key.includes('VOTRE') || url.includes('xxxxx')) return false;
+    return true;
+}
 
 // ============================================
 // INITIALISATION
 // ============================================
-document.addEventListener('DOMContentLoaded', async () => {
-    console.log('DuoQuest - Initialisation...');
-    
-    // Vérifier la configuration Supabase
-    if (!SUPABASE_CONFIG || SUPABASE_CONFIG.SUPABASE_URL === 'YOUR_SUPABASE_URL') {
-        showError('Configuration manquante. Veuillez remplir config.js avec vos identifiants Supabase.');
+document.addEventListener('DOMContentLoaded', init);
+
+async function init() {
+    // 1) Vérifier la configuration
+    if (!isConfigured()) {
+        const content = $('loading-screen').querySelector('.loading-content');
+        content.innerHTML = `
+            <div class="logo">⚠️</div>
+            <h1>Configuration manquante</h1>
+            <p style="color:var(--text-secondary);padding:0 16px">
+                Remplissez <code>config.js</code> avec l'URL et la clé anon de votre projet Supabase.
+            </p>`;
         return;
     }
-    
-    // Initialiser Supabase
+
+    // 2) Initialiser Supabase
     try {
         AppState.supabase = window.supabase.createClient(
             SUPABASE_CONFIG.SUPABASE_URL,
             SUPABASE_CONFIG.SUPABASE_ANON_KEY
         );
-        console.log('Supabase initialisé avec succès');
     } catch (error) {
         console.error('Erreur Supabase:', error);
-        showError('Erreur de connexion à Supabase');
+        toast('Erreur de connexion à Supabase');
         return;
     }
-    
-    // Vérifier la session existante
-    await checkSession();
-    
-    // Configurer les écouteurs d'événements
+
+    // 3) Écouter les changements d'authentification
+    AppState.supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN') {
+            onSignedIn(session.user);
+        } else if (event === 'SIGNED_OUT') {
+            resetAppState();
+            showScreen('auth-screen');
+        }
+    });
+
+    // 4) Configurer les écouteurs d'événements
     setupEventListeners();
-    
-    // Masquer l'écran de chargement
-    setTimeout(() => {
-        showScreen('auth-screen');
-    }, 1000);
-});
+
+    // 5) Vérifier la session existante
+    await checkSession();
+}
 
 // ============================================
 // GESTION DES ÉCRANS
 // ============================================
 function showScreen(screenId) {
-    document.querySelectorAll('.screen').forEach(screen => {
-        screen.classList.remove('active');
-    });
-    document.getElementById(screenId).classList.add('active');
+    document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
+    const target = $(screenId);
+    if (target) target.classList.add('active');
+    window.scrollTo(0, 0);
 }
 
 // ============================================
@@ -74,13 +169,8 @@ function showScreen(screenId) {
 async function checkSession() {
     try {
         const { data: { session } } = await AppState.supabase.auth.getSession();
-        
         if (session) {
-            AppState.user = session.user;
-            await loadProfile();
-            await loadCouple();
-            showScreen('home-screen');
-            updateUI();
+            await onSignedIn(session.user);
         } else {
             showScreen('auth-screen');
         }
@@ -90,97 +180,81 @@ async function checkSession() {
     }
 }
 
+/** Actions communes après connexion (utilisées par le listener ET checkSession). */
+async function onSignedIn(user) {
+    AppState.user = user;
+    await loadProfile();
+    await loadCouple();
+    showScreen('home-screen');
+    await loadPacks();
+}
+
 async function loadProfile() {
     try {
         const { data, error } = await AppState.supabase
             .from('profiles')
             .select('*')
             .eq('id', AppState.user.id)
-            .single();
-        
+            .maybeSingle();
+
         if (error) throw error;
-        
-        AppState.profile = data;
-        document.getElementById('user-name').textContent = data.display_name || AppState.user.email;
+
+        if (data) {
+            AppState.profile = data;
+        } else {
+            // Profil absent (trigger non exécuté) : on le crée
+            await createProfile();
+            return;
+        }
+        $('user-name').textContent = data.display_name || AppState.user.email;
     } catch (error) {
         console.error('Erreur chargement profil:', error);
-        // Créer un profil si inexistant
-        await createProfile();
     }
 }
 
 async function createProfile() {
     try {
         const displayName = AppState.user.email.split('@')[0];
-        
         const { data, error } = await AppState.supabase
             .from('profiles')
-            .insert({
-                id: AppState.user.id,
-                display_name: displayName
-            })
+            .insert({ id: AppState.user.id, display_name: displayName })
             .select()
             .single();
-        
+
         if (error) throw error;
-        
         AppState.profile = data;
-        document.getElementById('user-name').textContent = displayName;
+        $('user-name').textContent = displayName;
     } catch (error) {
         console.error('Erreur création profil:', error);
     }
 }
 
 async function handleLogin(email, password) {
-    try {
-        const { data, error } = await AppState.supabase.auth.signInWithPassword({
-            email,
-            password
-        });
-        
-        if (error) throw error;
-        
-        AppState.user = data.user;
-        await loadProfile();
-        await loadCouple();
-        showScreen('home-screen');
-        updateUI();
-    } catch (error) {
-        console.error('Erreur connexion:', error);
+    const { error } = await AppState.supabase.auth.signInWithPassword({ email, password });
+    if (error) {
         showAuthError(error.message);
     }
+    // La navigation est gérée par onAuthStateChange (SIGNED_IN).
 }
 
 async function handleSignup(email, password) {
-    try {
-        const { data, error } = await AppState.supabase.auth.signUp({
-            email,
-            password
-        });
-        
-        if (error) throw error;
-        
-        // Le profil sera créé automatiquement par le trigger
-        AppState.user = data.user;
-        await loadProfile();
-        showScreen('home-screen');
-        updateUI();
-    } catch (error) {
-        console.error('Erreur inscription:', error);
+    const { data, error } = await AppState.supabase.auth.signUp({ email, password });
+    if (error) {
         showAuthError(error.message);
+        return;
+    }
+    // Si la confirmation email est activée, `session` est null.
+    if (data.session) {
+        // La navigation est gérée par onAuthStateChange.
+    } else {
+        showAuthError('Compte créé ! Vérifiez votre email pour confirmer votre inscription.');
     }
 }
 
 async function handleLogout() {
-    try {
-        await AppState.supabase.auth.signOut();
-        AppState.user = null;
-        AppState.profile = null;
-        AppState.couple = null;
-        showScreen('auth-screen');
-    } catch (error) {
-        console.error('Erreur déconnexion:', error);
-    }
+    cleanupGame();
+    await AppState.supabase.auth.signOut();
+    // La réinitialisation est gérée par onAuthStateChange (SIGNED_OUT).
 }
 
 // ============================================
@@ -190,75 +264,55 @@ async function loadCouple() {
     try {
         const { data, error } = await AppState.supabase
             .from('couple_members')
-            .select(`
-                couples (
-                    id,
-                    name,
-                    invite_code,
-                    is_active
-                )
-            `)
+            .select('couples(id, name, invite_code, is_active)')
             .eq('user_id', AppState.user.id)
-            .single();
-        
+            .order('joined_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
         if (error) throw error;
-        
-        AppState.couple = data.couples;
-        updateCoupleUI();
+        AppState.couple = data ? data.couples : null;
     } catch (error) {
         console.error('Erreur chargement couple:', error);
         AppState.couple = null;
-        updateCoupleUI();
     }
+    updateCoupleUI();
 }
 
 async function createCouple(name) {
     try {
-        const { data, error } = await AppState.supabase.rpc('create_couple', {
-            couple_name: name
-        });
-        
+        const { data, error } = await AppState.supabase.rpc('create_couple', { couple_name: name });
         if (error) throw error;
-        
         AppState.couple = data;
         updateCoupleUI();
         closeModal();
-        return true;
     } catch (error) {
         console.error('Erreur création couple:', error);
         showModalError(error.message);
-        return false;
     }
 }
 
 async function joinCouple(inviteCode) {
     try {
-        const { data, error } = await AppState.supabase.rpc('join_couple', {
-            invite_code_param: inviteCode
-        });
-        
+        const { data, error } = await AppState.supabase.rpc('join_couple', { invite_code_param: inviteCode });
         if (error) throw error;
-        
         AppState.couple = data;
         updateCoupleUI();
         closeModal();
-        return true;
     } catch (error) {
         console.error('Erreur rejoindre couple:', error);
         showModalError(error.message);
-        return false;
     }
 }
 
 function updateCoupleUI() {
-    const coupleInfo = document.getElementById('couple-info');
-    const noCouple = document.getElementById('no-couple');
-    
+    const coupleInfo = $('couple-info');
+    const noCouple = $('no-couple');
     if (AppState.couple) {
         coupleInfo.classList.remove('hidden');
         noCouple.classList.add('hidden');
-        document.getElementById('couple-name').textContent = AppState.couple.name;
-        document.getElementById('invite-code').textContent = AppState.couple.invite_code;
+        $('couple-name').textContent = AppState.couple.name;
+        $('invite-code').textContent = AppState.couple.invite_code;
     } else {
         coupleInfo.classList.add('hidden');
         noCouple.classList.remove('hidden');
@@ -266,13 +320,12 @@ function updateCoupleUI() {
 }
 
 async function copyInviteCode() {
-    if (AppState.couple) {
-        try {
-            await navigator.clipboard.writeText(AppState.couple.invite_code);
-            alert('Code copié !');
-        } catch (error) {
-            console.error('Erreur copie:', error);
-        }
+    if (!AppState.couple) return;
+    try {
+        await navigator.clipboard.writeText(AppState.couple.invite_code);
+        toast('Code copié !');
+    } catch {
+        toast(AppState.couple.invite_code);
     }
 }
 
@@ -284,367 +337,681 @@ async function loadPacks() {
         const { data, error } = await AppState.supabase
             .from('packs')
             .select('*')
-            .eq('is_active', true);
-        
+            .eq('is_active', true)
+            .order('name');
         if (error) throw error;
-        
-        renderPacks(data);
+        renderPacks(data || []);
     } catch (error) {
         console.error('Erreur chargement packs:', error);
     }
 }
 
 function renderPacks(packs) {
-    const container = document.getElementById('packs-list');
+    const container = $('packs-list');
     container.innerHTML = '';
-    
-    packs.forEach(pack => {
-        const card = document.createElement('div');
+    packs.forEach((pack) => {
+        const card = document.createElement('button');
+        card.type = 'button';
         card.className = 'pack-card';
         card.dataset.packId = pack.id;
         card.dataset.slug = pack.slug;
         card.innerHTML = `
-            <div class="pack-icon">${pack.icon_emoji || '📦'}</div>
-            <div class="pack-name">${pack.name}</div>
-        `;
-        
+            <div class="pack-icon">${escapeHtml(pack.icon_emoji || '📦')}</div>
+            <div class="pack-name">${escapeHtml(pack.name)}</div>`;
         card.addEventListener('click', () => selectPack(card, pack));
         container.appendChild(card);
     });
 }
 
 function selectPack(cardElement, pack) {
-    // Désélectionner tous les packs
-    document.querySelectorAll('.pack-card').forEach(c => c.classList.remove('selected'));
-    
-    // Sélectionner le pack cliqué
+    document.querySelectorAll('.pack-card').forEach((c) => c.classList.remove('selected'));
     cardElement.classList.add('selected');
     AppState.selectedPack = pack;
-    
-    // Afficher l'avertissement H125 si nécessaire
-    const warningBanner = document.getElementById('h125-warning');
-    if (pack.slug === 'h125') {
-        warningBanner.classList.remove('hidden');
-    } else {
-        warningBanner.classList.add('hidden');
-    }
+
+    // Avertissement spécifique au pack H125
+    $('h125-warning').classList.toggle('hidden', pack.slug !== 'h125');
 }
 
 // ============================================
-// JEU
+// JEU : démarrage
 // ============================================
 async function startGame(mode) {
-    if (!AppState.couple) {
-        alert('Veuillez créer ou rejoindre un couple d\'abord !');
-        return;
-    }
-    
-    if (!AppState.selectedPack) {
-        alert('Veuillez sélectionner un pack !');
-        return;
-    }
-    
+    if (!AppState.couple) return toast('Créez ou rejoignez un couple d\'abord !');
+    if (!AppState.selectedPack) return toast('Sélectionnez un pack !');
+
+    AppState.mode = mode;
+
     try {
-        // Créer une session de jeu
-        const { data: session, error } = await AppState.supabase
-            .from('game_sessions')
-            .insert({
-                couple_id: AppState.couple.id,
-                pack_id: AppState.selectedPack.id,
-                mode: mode,
-                timer_seconds: mode === 'blitz' ? 60 : 15,
-                total_rounds: mode === 'blitz' ? 999 : 5,
-                status: 'active',
-                created_by: AppState.user.id
-            })
-            .select()
-            .single();
-        
-        if (error) throw error;
-        
+        // Trouver une session active du couple, sinon en créer une.
+        const session = await findOrCreateSession(mode);
         AppState.gameSession = session;
-        
-        // Ajouter le joueur actuel
-        await AppState.supabase
-            .from('session_players')
-            .insert({
-                session_id: session.id,
-                user_id: AppState.user.id
-            });
-        
-        // Charger les questions
-        await loadQuestions();
-        
-        // Afficher l'écran de jeu
+        AppState.isHost = session.created_by === AppState.user.id;
+
+        await ensureJoined(session.id);
+        await loadQuestions(session);
+
+        AppState.currentRound = session.current_round || 0;
+        AppState.answeredThisRound = false;
+        AppState.advancing = false;
+
         showScreen('game-screen');
-        document.getElementById('game-mode-display').textContent = 
-            mode === 'quiz_duel' ? 'Quiz Duel' : 
-            mode === 'blitz' ? 'Blitz 60s' : 'Devinette';
-        
-        // Démarrer le jeu
-        startRound();
-        
-        // Écouter les changements en temps réel
-        setupRealtimeListeners(session.id);
-        
+        setupGameHeader(mode);
+        renderScores();
+        setupRealtime(session);
+
+        if (mode === 'blitz') {
+            startBlitz();
+        } else {
+            startRound();
+        }
     } catch (error) {
         console.error('Erreur démarrage jeu:', error);
-        alert('Erreur: ' + error.message);
+        toast('Erreur : ' + error.message);
     }
 }
 
-async function loadQuestions() {
-    try {
-        const { data, error } = await AppState.supabase
-            .from('questions')
-            .select('*')
-            .eq('pack_id', AppState.selectedPack.id)
-            .eq('status', 'active')
-            .limit(10);
-        
-        if (error) throw error;
-        
-        // Mélanger les questions
-        AppState.questions = data.sort(() => Math.random() - 0.5);
-        AppState.currentRound = 0;
-    } catch (error) {
-        console.error('Erreur chargement questions:', error);
+async function findOrCreateSession(mode) {
+    // 1) Chercher une session active RÉCENTE pour ce couple + pack + mode
+    //    (limite à 2 h pour éviter de rejoindre une session orpheline)
+    const recent = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await AppState.supabase
+        .from('game_sessions')
+        .select('*')
+        .eq('couple_id', AppState.couple.id)
+        .eq('pack_id', AppState.selectedPack.id)
+        .eq('mode', mode)
+        .in('status', ['pending', 'active'])
+        .gt('created_at', recent)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+    if (error) throw error;
+    if (data && data.length) return data[0];
+
+    // 2) Sinon, créer la session
+    const isBlitz = mode === 'blitz';
+    const { data: created, error: createError } = await AppState.supabase
+        .from('game_sessions')
+        .insert({
+            couple_id: AppState.couple.id,
+            pack_id: AppState.selectedPack.id,
+            mode,
+            status: 'active',
+            timer_seconds: isBlitz ? 60 : 15,
+            total_rounds: isBlitz ? 999 : 5,
+            current_round: 0,
+            created_by: AppState.user.id,
+            started_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+    if (createError) throw createError;
+    return created;
+}
+
+/** Ajoute le joueur courant à la session s'il n'y est pas déjà. */
+async function ensureJoined(sessionId) {
+    const { data } = await AppState.supabase
+        .from('session_players')
+        .select('id')
+        .eq('session_id', sessionId)
+        .eq('user_id', AppState.user.id)
+        .maybeSingle();
+
+    if (!data) {
+        await AppState.supabase
+            .from('session_players')
+            .insert({ session_id: sessionId, user_id: AppState.user.id });
     }
 }
 
+async function loadQuestions(session) {
+    let query = AppState.supabase
+        .from('questions')
+        .select('*')
+        .eq('pack_id', AppState.selectedPack.id)
+        .eq('status', 'active');
+
+    // Mode Devinette : uniquement les questions de type guess ou qcm
+    if (AppState.mode === 'devinette') {
+        query = query.in('type', ['guess', 'qcm']);
+    }
+
+    const { data, error } = await query.limit(30);
+    if (error) throw error;
+    if (!data || !data.length) throw new Error('Aucune question active pour ce pack.');
+
+    // Ordre DÉTERMINISTE partagé entre les deux joueurs (seed = id de session)
+    let questions = seededShuffle(data, session.id);
+
+    if (AppState.mode !== 'blitz') {
+        const n = Math.min(session.total_rounds, questions.length);
+        questions = questions.slice(0, n);
+    }
+
+    AppState.questions = questions;
+}
+
+function setupGameHeader(mode) {
+    const labels = {
+        quiz_duel: '⚔️ Quiz Duel',
+        blitz: '⚡ Blitz 60s',
+        devinette: '❓ Devinette',
+    };
+    $('game-mode-display').textContent = labels[mode] || mode;
+}
+
+// ============================================
+// JEU : round (quiz_duel & devinette)
+// ============================================
 function startRound() {
-    if (AppState.currentRound >= AppState.questions.length || 
-        AppState.currentRound >= AppState.gameSession.total_rounds) {
-        endGame();
+    if (AppState.gameSession && AppState.gameSession.status === 'completed') {
+        showResults();
         return;
     }
-    
-    const question = AppState.questions[AppState.currentRound];
-    AppState.currentQuestion = question;
-    
-    // Mettre à jour l'affichage
-    document.getElementById('question-pack').textContent = AppState.selectedPack.name;
-    document.getElementById('question-difficulty').textContent = 
-        'Difficulté: ' + '⭐'.repeat(question.difficulty);
-    document.getElementById('question-text').textContent = question.question_text;
-    
-    // Générer les options
-    const optionsContainer = document.getElementById('options-container');
-    optionsContainer.innerHTML = '';
-    
-    let options = [];
-    if (question.type === 'qcm' || question.type === 'true_false' || question.type === 'guess') {
-        options = JSON.parse(question.options);
-    } else {
-        // Pour les autres types, utiliser correct_answer comme option unique
-        options = [question.correct_answer];
+
+    const idx = AppState.currentRound;
+    if (idx >= AppState.questions.length) {
+        if (AppState.isHost) endSession();
+        else showResults();
+        return;
     }
-    
-    options.forEach((option, index) => {
-        const btn = document.createElement('button');
-        btn.className = 'option-btn';
-        btn.textContent = option;
-        btn.addEventListener('click', () => submitAnswer(option, btn));
-        optionsContainer.appendChild(btn);
-    });
-    
-    // Réinitialiser le feedback
-    document.getElementById('feedback-container').classList.add('hidden');
-    
-    // Démarrer le timer
-    startTimer();
+
+    const question = AppState.questions[idx];
+    AppState.currentQuestion = question;
+    AppState.answeredThisRound = false;
+    renderQuestion(question);
+    startRoundTimer();
 }
 
-function startTimer() {
-    clearInterval(AppState.timer);
-    AppState.timeLeft = AppState.gameSession.timer_seconds;
+function renderQuestion(question) {
+    $('question-pack').textContent = AppState.selectedPack.name;
+    $('question-difficulty').textContent = 'Difficulté : ' + '⭐'.repeat(question.difficulty || 1);
+    $('question-text').textContent = question.question_text;
+
+    const container = $('options-container');
+    container.innerHTML = '';
+
+    // true_false / qcm / guess → options ; order / matching → réponse unique
+    let options = (question.type === 'order' || question.type === 'matching')
+        ? [question.correct_answer]
+        : parseOptions(question.options);
+
+    if (!options.length) options = [question.correct_answer];
+
+    options.forEach((option) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'option-btn';
+        btn.textContent = option;
+        btn.dataset.value = option;
+        btn.addEventListener('click', () => submitAnswer(option));
+        container.appendChild(btn);
+    });
+
+    $('feedback-container').classList.add('hidden');
+}
+
+function startRoundTimer() {
+    clearInterval(AppState.timerInterval);
+    AppState.timeLeft = AppState.gameSession.timer_seconds || 15;
     updateTimerDisplay();
-    
-    AppState.timer = setInterval(() => {
+
+    AppState.timerInterval = setInterval(() => {
         AppState.timeLeft--;
         updateTimerDisplay();
-        
         if (AppState.timeLeft <= 0) {
-            clearInterval(AppState.timer);
-            submitAnswer(null, null); // Temps écoulé
+            clearInterval(AppState.timerInterval);
+            onRoundTimerExpire();
         }
     }, 1000);
 }
 
 function updateTimerDisplay() {
-    const timerEl = document.getElementById('game-timer');
-    timerEl.textContent = `⏱️ ${AppState.timeLeft}s`;
-    
-    if (AppState.timeLeft <= 5) {
-        timerEl.classList.remove('hidden');
-    } else {
-        timerEl.classList.add('hidden');
+    const el = $('game-timer');
+    el.classList.remove('hidden');
+    el.textContent = '⏱️ ' + AppState.timeLeft + 's';
+    el.classList.toggle('urgent', AppState.timeLeft <= 5);
+}
+
+function onRoundTimerExpire() {
+    if (!AppState.answeredThisRound) {
+        submitAnswer(null); // temps écoulé → réponse vide
+    }
+    // Filet de sécurité pour l'hôte : avancer même si le partenaire ne répond pas.
+    if (AppState.isHost && !AppState.advancing) {
+        setTimeout(() => advanceRound(), 1200);
     }
 }
 
-async function submitAnswer(selectedAnswer, btnElement) {
-    clearInterval(AppState.timer);
-    
+async function submitAnswer(selectedAnswer) {
+    if (AppState.answeredThisRound) return;
+    AppState.answeredThisRound = true;
+    clearInterval(AppState.timerInterval);
+
+    const question = AppState.currentQuestion;
+    const isCorrect = selectedAnswer !== null && selectedAnswer === question.correct_answer;
+
+    // Score : 1000 points + bonus rapidité (max 500)
+    const total = AppState.gameSession.timer_seconds || 15;
+    const bonus = isCorrect ? Math.round(Math.max(0, AppState.timeLeft) / total * 500) : 0;
+    const points = isCorrect ? 1000 + bonus : 0;
+
+    await recordAnswer(question, selectedAnswer, isCorrect, points);
+    await updatePlayerScore(isCorrect, points);
+    revealFeedback(question, selectedAnswer, isCorrect);
+
+    if (AppState.isHost) {
+        checkBothAnsweredAndAdvance();
+    }
+}
+
+async function recordAnswer(question, selectedAnswer, isCorrect, points) {
+    const playerId = await getPlayerId();
+    if (!playerId) return;
+    await AppState.supabase.from('answers').insert({
+        session_id: AppState.gameSession.id,
+        player_id: playerId,
+        question_id: question.id,
+        selected_answer: selectedAnswer,
+        is_correct: isCorrect,
+        points_earned: points,
+        time_taken_ms: Math.round((AppState.gameSession.timer_seconds - AppState.timeLeft) * 1000),
+    });
+}
+
+async function updatePlayerScore(isCorrect, points) {
+    const playerId = await getPlayerId();
+    if (!playerId) return;
+
+    // Essayer le RPC sécurisé, sinon mise à jour directe (RLS "own row").
+    const { error } = await AppState.supabase.rpc('update_player_score', {
+        p_player_id: playerId,
+        p_points: points,
+        p_is_correct: isCorrect,
+    });
+
+    if (error) {
+        const { data: cur } = await AppState.supabase
+            .from('session_players')
+            .select('score, answers_count, correct_answers_count')
+            .eq('id', playerId)
+            .maybeSingle();
+        if (cur) {
+            await AppState.supabase.from('session_players').update({
+                score: (cur.score || 0) + points,
+                answers_count: (cur.answers_count || 0) + 1,
+                correct_answers_count: (cur.correct_answers_count || 0) + (isCorrect ? 1 : 0),
+            }).eq('id', playerId);
+        }
+    }
+}
+
+async function getPlayerId() {
+    const { data } = await AppState.supabase
+        .from('session_players')
+        .select('id')
+        .eq('session_id', AppState.gameSession.id)
+        .eq('user_id', AppState.user.id)
+        .maybeSingle();
+    return data ? data.id : null;
+}
+
+function revealFeedback(question, selectedAnswer, isCorrect) {
+    const fb = $('feedback-container');
+    const result = $('feedback-result');
+    result.textContent = selectedAnswer === null
+        ? '⏱️ Temps écoulé'
+        : (isCorrect ? '✅ Correct !' : '❌ Incorrect');
+    result.className = 'feedback-result ' + (isCorrect ? 'correct' : 'incorrect');
+    $('feedback-explanation').textContent = question.explanation || '';
+    fb.classList.remove('hidden');
+
+    // Surligner la bonne réponse et l'éventuelle erreur
+    document.querySelectorAll('.option-btn').forEach((btn) => {
+        btn.disabled = true;
+        if (btn.dataset.value === question.correct_answer) btn.classList.add('correct');
+        else if (btn.dataset.value === selectedAnswer) btn.classList.add('incorrect');
+    });
+}
+
+/** Hôte : avance le round quand les DEUX joueurs ont répondu. */
+async function checkBothAnsweredAndAdvance() {
+    const question = AppState.currentQuestion;
+    if (!question) return;
+
+    const { data } = await AppState.supabase
+        .from('answers')
+        .select('player_id')
+        .eq('session_id', AppState.gameSession.id)
+        .eq('question_id', question.id);
+
+    const distinctPlayers = new Set((data || []).map((a) => a.player_id)).size;
+    if (distinctPlayers >= 2) {
+        // Petite pause pour lire l'explication, puis round suivant
+        setTimeout(() => advanceRound(), 2600);
+    }
+}
+
+async function advanceRound() {
+    if (AppState.advancing) return;
+    if (!AppState.isHost) return;
+    AppState.advancing = true;
+
+    const next = AppState.currentRound + 1;
+    const total = AppState.gameSession.total_rounds;
+
+    if (next >= total || next >= AppState.questions.length) {
+        await endSession();
+    } else {
+        await AppState.supabase
+            .from('game_sessions')
+            .update({ current_round: next })
+            .eq('id', AppState.gameSession.id);
+        // La mise à jour est reçue par les DEUX joueurs via Realtime.
+    }
+}
+
+async function endSession() {
+    await AppState.supabase
+        .from('game_sessions')
+        .update({ status: 'completed', ended_at: new Date().toISOString() })
+        .eq('id', AppState.gameSession.id);
+    showResults();
+}
+
+// ============================================
+// JEU : Blitz 60 secondes
+// ============================================
+function startBlitz() {
+    AppState.blitzIndex = 0;
+    AppState.blitzEnded = false;
+    $('game-timer').classList.remove('hidden');
+    renderBlitzQuestion();
+    startBlitzTimer();
+}
+
+/** Temps restant calculé depuis started_at (horloge partagée entre les deux joueurs). */
+function blitzRemaining() {
+    const started = AppState.gameSession?.started_at
+        ? new Date(AppState.gameSession.started_at).getTime()
+        : Date.now();
+    return Math.max(0, Math.round(60 - (Date.now() - started) / 1000));
+}
+
+function startBlitzTimer() {
+    clearInterval(AppState.blitzTimer);
+    AppState.blitzTimer = setInterval(() => {
+        AppState.blitzTimeLeft = blitzRemaining();
+        $('game-timer').textContent = '⏱️ ' + AppState.blitzTimeLeft + 's';
+        $('game-timer').classList.toggle('urgent', AppState.blitzTimeLeft <= 10);
+        if (AppState.blitzTimeLeft <= 0) {
+            clearInterval(AppState.blitzTimer);
+            finishBlitz();
+        }
+    }, 1000);
+}
+
+function renderBlitzQuestion() {
+    if (!AppState.questions.length) return;
+    const question = AppState.questions[AppState.blitzIndex % AppState.questions.length];
+    AppState.currentQuestion = question;
+    $('question-pack').textContent = AppState.selectedPack.name;
+    $('question-difficulty').textContent = 'Difficulté : ' + '⭐'.repeat(question.difficulty || 1);
+    $('question-text').textContent = question.question_text;
+
+    const container = $('options-container');
+    container.innerHTML = '';
+    // Pas d'explication en Blitz : seulement des options cliquables.
+    const options = parseOptions(question.options);
+    const list = options.length ? options : [question.correct_answer];
+    list.forEach((option) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'option-btn';
+        btn.textContent = option;
+        btn.dataset.value = option;
+        btn.addEventListener('click', () => blitzAnswer(option));
+        container.appendChild(btn);
+    });
+    $('feedback-container').classList.add('hidden');
+}
+
+async function blitzAnswer(selectedAnswer) {
+    if (AppState.blitzEnded) return;
     const question = AppState.currentQuestion;
     const isCorrect = selectedAnswer === question.correct_answer;
-    
-    // Calculer les points
-    let points = 0;
-    if (isCorrect) {
-        points = 1000 + (AppState.timeLeft * 50); // Bonus rapidité
+    const points = isCorrect ? 1000 : 0;
+
+    await recordBlitzAnswer(question, selectedAnswer, isCorrect, points);
+    await updatePlayerScore(isCorrect, points);
+
+    // Retour visuel rapide (sans explication), puis question suivante
+    flashAnswer(isCorrect);
+    AppState.blitzIndex++;
+    renderBlitzQuestion();
+}
+
+async function recordBlitzAnswer(question, selectedAnswer, isCorrect, points) {
+    const playerId = await getPlayerId();
+    if (!playerId) return;
+    await AppState.supabase.from('answers').insert({
+        session_id: AppState.gameSession.id,
+        player_id: playerId,
+        question_id: question.id,
+        selected_answer: selectedAnswer,
+        is_correct: isCorrect,
+        points_earned: points,
+        time_taken_ms: 0,
+    });
+}
+
+function flashAnswer(isCorrect) {
+    const fb = $('feedback-container');
+    $('feedback-result').textContent = isCorrect ? '✅' : '❌';
+    $('feedback-result').className = 'feedback-result ' + (isCorrect ? 'correct' : 'incorrect');
+    $('feedback-explanation').textContent = '';
+    fb.classList.remove('hidden');
+}
+
+async function finishBlitz() {
+    AppState.blitzEnded = true;
+    clearInterval(AppState.blitzTimer);
+    if (AppState.isHost) {
+        await AppState.supabase
+            .from('game_sessions')
+            .update({ status: 'completed', ended_at: new Date().toISOString() })
+            .eq('id', AppState.gameSession.id);
     }
-    
-    // Enregistrer la réponse
+    showResults();
+}
+
+// ============================================
+// SCORES & RÉSULTATS
+// ============================================
+async function renderScores() {
+    if (!AppState.gameSession) return;
     try {
-        // Récupérer le player_id
-        const { data: playerData } = await AppState.supabase
+        const { data, error } = await AppState.supabase
             .from('session_players')
-            .select('id')
+            .select('*, profiles(display_name)')
             .eq('session_id', AppState.gameSession.id)
-            .eq('user_id', AppState.user.id)
-            .single();
-        
-        if (playerData) {
-            await AppState.supabase
-                .from('answers')
-                .insert({
-                    session_id: AppState.gameSession.id,
-                    player_id: playerData.id,
-                    question_id: question.id,
-                    selected_answer: selectedAnswer,
-                    is_correct: isCorrect,
-                    points_earned: points,
-                    time_taken_ms: (AppState.gameSession.timer_seconds - AppState.timeLeft) * 1000
-                });
-            
-            // Mettre à jour le score du joueur
-            await AppState.supabase.rpc('update_player_score', {
-                p_player_id: playerData.id,
-                p_points: points,
-                p_is_correct: isCorrect
-            }).catch(() => {
-                // Si la fonction RPC n'existe pas, mettre à jour directement
-                console.log('Mise à jour directe du score...');
-            });
+            .order('joined_at', { ascending: true });
+
+        if (error) throw error;
+
+        for (let i = 1; i <= 2; i++) {
+            const el = $(`player${i}-score`);
+            if (!el) continue;
+            const player = (data || [])[i - 1];
+            if (player) {
+                const isMe = player.user_id === AppState.user.id;
+                el.querySelector('.player-name').textContent =
+                    (isMe ? 'Vous · ' : '') + (player.profiles?.display_name || 'Joueur ' + i);
+                el.querySelector('.score-value').textContent = player.score || 0;
+            } else {
+                el.querySelector('.player-name').textContent = i === 1 ? 'Vous' : 'Partenaire';
+                el.querySelector('.score-value').textContent = '0';
+            }
         }
     } catch (error) {
-        console.error('Erreur enregistrement réponse:', error);
+        console.error('Erreur scores:', error);
     }
-    
-    // Afficher le feedback
-    const feedbackContainer = document.getElementById('feedback-container');
-    const feedbackResult = document.getElementById('feedback-result');
-    const feedbackExplanation = document.getElementById('feedback-explanation');
-    
-    feedbackContainer.classList.remove('hidden');
-    feedbackResult.textContent = isCorrect ? '✅ Correct !' : '❌ Incorrect';
-    feedbackResult.className = 'feedback-result ' + (isCorrect ? 'correct' : 'incorrect');
-    feedbackExplanation.textContent = question.explanation || '';
-    
-    // Mettre en évidence la bonne/mauvaise réponse
-    if (btnElement) {
-        btnElement.classList.add(isCorrect ? 'correct' : 'incorrect');
-    }
-    
-    // Passer à la question suivante après un délai
-    setTimeout(() => {
-        AppState.currentRound++;
-        startRound();
-    }, 3000);
 }
 
-function endGame() {
-    clearInterval(AppState.timer);
-    
-    // Afficher les scores finaux
-    alert('Partie terminée !');
-    
-    // Retour à l'accueil
-    showScreen('home-screen');
-    
-    // Nettoyer la session
-    AppState.gameSession = null;
-    AppState.currentQuestion = null;
+async function showResults() {
+    cleanupTimers();
+    try {
+        const { data, error } = await AppState.supabase
+            .from('session_players')
+            .select('*, profiles(display_name)')
+            .eq('session_id', AppState.gameSession.id)
+            .order('score', { ascending: false });
+
+        if (error) throw error;
+
+        const rows = (data || []).map((p) => ({
+            name: p.profiles?.display_name || 'Joueur',
+            score: p.score || 0,
+            correct: p.correct_answers_count || 0,
+            answers: p.answers_count || 0,
+            isMe: p.user_id === AppState.user.id,
+        }));
+
+        $('results-body').innerHTML = rows.map((r, i) => `
+            <div class="result-row ${r.isMe ? 'me' : ''}">
+                <span class="result-rank">${i === 0 ? '🏆' : '🥈'}</span>
+                <div class="result-info">
+                    <div class="result-name">${escapeHtml(r.name)}${r.isMe ? ' (vous)' : ''}</div>
+                    <div class="result-detail">${r.correct} bonne(s) réponse(s) / ${r.answers}</div>
+                </div>
+                <span class="result-score">${r.score}</span>
+            </div>`).join('');
+
+        $('results-overlay').classList.remove('hidden');
+    } catch (error) {
+        console.error('Erreur résultats:', error);
+        $('results-body').textContent = 'Erreur lors du chargement des résultats.';
+        $('results-overlay').classList.remove('hidden');
+    }
 }
 
 // ============================================
-// TEMPS RÉEL
+// TEMPS RÉEL (Supabase Realtime)
 // ============================================
-function setupRealtimeListeners(sessionId) {
-    // Écouter les réponses des autres joueurs
-    AppState.supabase
-        .channel(`answers:${sessionId}`)
+function setupRealtime(session) {
+    closeChannels();
+
+    // 1) Mises à jour de la session (round courant, fin de partie)
+    const sessionChannel = AppState.supabase
+        .channel(`session:${session.id}`)
+        .on('postgres_changes', {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'game_sessions',
+            filter: `id=eq.${session.id}`,
+        }, (payload) => {
+            const s = payload.new;
+            AppState.gameSession = { ...AppState.gameSession, ...s };
+            if (s.status === 'completed') {
+                showResults();
+            } else if (s.status === 'cancelled') {
+                toast('La partie a été annulée.');
+                cleanupGame();
+                showScreen('home-screen');
+            } else {
+                AppState.currentRound = s.current_round || 0;
+                AppState.advancing = false;
+                if (AppState.mode !== 'blitz') startRound();
+            }
+        })
+        .subscribe();
+    AppState.channels.push(sessionChannel);
+
+    // 2) Nouvelles réponses (mise à jour des scores + détection "les deux ont répondu")
+    const answersChannel = AppState.supabase
+        .channel(`answers:${session.id}`)
         .on('postgres_changes', {
             event: 'INSERT',
             schema: 'public',
             table: 'answers',
-            filter: `session_id=eq.${sessionId}`
-        }, payload => {
-            console.log('Nouvelle réponse:', payload);
-            // Mettre à jour les scores en temps réel
-            updateScores();
+            filter: `session_id=eq.${session.id}`,
+        }, (payload) => {
+            // Ne pas recompter sa propre réponse
+            if (payload.new.player_id && AppState.isHost && AppState.currentQuestion) {
+                checkBothAnsweredAndAdvance();
+            }
+            renderScores();
         })
         .subscribe();
-    
-    // Écouter les messages de chat
+    AppState.channels.push(answersChannel);
+
+    // 2b) Joueurs qui rejoignent la session (mise à jour des noms/scores)
+    const playersChannel = AppState.supabase
+        .channel(`players:${session.id}`)
+        .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'session_players',
+            filter: `session_id=eq.${session.id}`,
+        }, () => renderScores())
+        .subscribe();
+    AppState.channels.push(playersChannel);
+
+    // 3) Chat du couple
     if (AppState.couple) {
-        AppState.supabase
+        const chatChannel = AppState.supabase
             .channel(`chat:${AppState.couple.id}`)
             .on('postgres_changes', {
                 event: 'INSERT',
                 schema: 'public',
                 table: 'chat_messages',
-                filter: `couple_id=eq.${AppState.couple.id}`
-            }, payload => {
+                filter: `couple_id=eq.${AppState.couple.id}`,
+            }, (payload) => {
                 addChatMessage(payload.new);
             })
             .subscribe();
+        AppState.channels.push(chatChannel);
     }
+
+    // 4) Emojis rapides (réactions du partenaire)
+    const emojiChannel = AppState.supabase
+        .channel(`emojis:${session.id}`)
+        .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'emoji_reactions',
+            filter: `session_id=eq.${session.id}`,
+        }, (payload) => {
+            if (payload.new.sender_id !== AppState.user?.id) {
+                showEmojiAnimation(payload.new.emoji);
+            }
+        })
+        .subscribe();
+    AppState.channels.push(emojiChannel);
 }
 
-async function updateScores() {
-    if (!AppState.gameSession) return;
-    
-    try {
-        const { data, error } = await AppState.supabase
-            .from('session_players')
-            .select('*, profiles(display_name)')
-            .eq('session_id', AppState.gameSession.id);
-        
-        if (error) throw error;
-        
-        // Mettre à jour l'affichage des scores
-        data.forEach((player, index) => {
-            const scoreEl = document.getElementById(`player${index + 1}-score`);
-            if (scoreEl) {
-                scoreEl.querySelector('.player-name').textContent = 
-                    player.profiles?.display_name || `Joueur ${index + 1}`;
-                scoreEl.querySelector('.score-value').textContent = player.score || 0;
-            }
-        });
-    } catch (error) {
-        console.error('Erreur mise à jour scores:', error);
-    }
+function closeChannels() {
+    AppState.channels.forEach((c) => AppState.supabase.removeChannel(c));
+    AppState.channels = [];
 }
 
 // ============================================
 // CHAT
 // ============================================
 function toggleChat() {
-    const chatPanel = document.getElementById('chat-panel');
-    AppState.chatOpen = !AppState.chatOpen;
-    
-    if (AppState.chatOpen) {
-        chatPanel.classList.remove('hidden');
+    const panel = $('chat-panel');
+    if (panel.classList.contains('hidden')) {
+        panel.classList.remove('hidden');
         loadChatMessages();
     } else {
-        chatPanel.classList.add('hidden');
+        panel.classList.add('hidden');
     }
 }
 
 async function loadChatMessages() {
     if (!AppState.couple) return;
-    
     try {
         const { data, error } = await AppState.supabase
             .from('chat_messages')
@@ -652,17 +1019,11 @@ async function loadChatMessages() {
             .eq('couple_id', AppState.couple.id)
             .order('created_at', { ascending: false })
             .limit(50);
-        
         if (error) throw error;
-        
-        const container = document.getElementById('chat-messages');
+
+        const container = $('chat-messages');
         container.innerHTML = '';
-        
-        data.reverse().forEach(msg => {
-            addChatMessage(msg, false);
-        });
-        
-        // Scroll vers le bas
+        (data || []).reverse().forEach((msg) => addChatMessage(msg, false));
         container.scrollTop = container.scrollHeight;
     } catch (error) {
         console.error('Erreur chargement chat:', error);
@@ -670,54 +1031,42 @@ async function loadChatMessages() {
 }
 
 function addChatMessage(msg, scroll = true) {
-    const container = document.getElementById('chat-messages');
-    
-    const messageEl = document.createElement('div');
-    messageEl.className = 'chat-message' + (msg.sender_id === AppState.user?.id ? ' own' : '');
-    
-    messageEl.innerHTML = `
-        <div class="chat-sender">${msg.profiles?.display_name || 'Inconnu'}</div>
-        <div class="chat-text">${msg.message_text}</div>
-    `;
-    
-    container.appendChild(messageEl);
-    
-    if (scroll) {
-        container.scrollTop = container.scrollHeight;
-    }
+    const container = $('chat-messages');
+    const el = document.createElement('div');
+    el.className = 'chat-message' + (msg.sender_id === AppState.user?.id ? ' own' : '');
+    el.innerHTML = `
+        <div class="chat-sender">${escapeHtml(msg.profiles?.display_name || 'Inconnu')}</div>
+        <div class="chat-text">${escapeHtml(msg.message_text)}</div>`;
+    container.appendChild(el);
+    if (scroll) container.scrollTop = container.scrollHeight;
 }
 
 async function sendChatMessage(text) {
     if (!AppState.couple || !text.trim()) return;
-    
     try {
-        await AppState.supabase
-            .from('chat_messages')
-            .insert({
-                couple_id: AppState.couple.id,
-                sender_id: AppState.user.id,
-                message_text: text.trim()
-            });
-        
-        document.getElementById('chat-input').value = '';
+        await AppState.supabase.from('chat_messages').insert({
+            couple_id: AppState.couple.id,
+            session_id: AppState.gameSession ? AppState.gameSession.id : null,
+            sender_id: AppState.user.id,
+            message_text: text.trim(),
+        });
+        $('chat-input').value = '';
     } catch (error) {
         console.error('Erreur envoi message:', error);
     }
 }
 
+// ============================================
+// EMOJIS RAPIDES
+// ============================================
 async function sendEmoji(emoji) {
     if (!AppState.gameSession) return;
-    
     try {
-        await AppState.supabase
-            .from('emoji_reactions')
-            .insert({
-                session_id: AppState.gameSession.id,
-                sender_id: AppState.user.id,
-                emoji: emoji
-            });
-        
-        // Animation visuelle
+        await AppState.supabase.from('emoji_reactions').insert({
+            session_id: AppState.gameSession.id,
+            sender_id: AppState.user.id,
+            emoji,
+        });
         showEmojiAnimation(emoji);
     } catch (error) {
         console.error('Erreur envoi emoji:', error);
@@ -725,178 +1074,178 @@ async function sendEmoji(emoji) {
 }
 
 function showEmojiAnimation(emoji) {
-    // Créer une animation temporaire
-    const animation = document.createElement('div');
-    animation.textContent = emoji;
-    animation.style.cssText = `
-        position: fixed;
-        font-size: 3rem;
-        pointer-events: none;
-        z-index: 1000;
-        animation: floatUp 1s ease-out forwards;
-    `;
-    
-    animation.style.left = Math.random() * 80 + 10 + '%';
-    animation.style.top = '50%';
-    
-    document.body.appendChild(animation);
-    
-    setTimeout(() => animation.remove(), 1000);
+    const el = document.createElement('div');
+    el.textContent = emoji;
+    el.className = 'emoji-float';
+    el.style.left = (Math.random() * 70 + 15) + '%';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 1200);
 }
 
 // ============================================
-// MODAL
+// MODAL COUPLE
 // ============================================
 function openModal(type) {
-    const modal = document.getElementById('couple-modal');
-    const createForm = document.getElementById('create-couple-form');
-    const joinForm = document.getElementById('join-couple-form');
-    const modalTitle = document.getElementById('modal-title');
-    
+    const modal = $('couple-modal');
+    const createForm = $('create-couple-form');
+    const joinForm = $('join-couple-form');
     modal.classList.remove('hidden');
-    
+
     if (type === 'create') {
         createForm.classList.remove('hidden');
         joinForm.classList.add('hidden');
-        modalTitle.textContent = 'Créer un Couple';
+        $('modal-title').textContent = 'Créer un couple';
     } else {
         createForm.classList.add('hidden');
         joinForm.classList.remove('hidden');
-        modalTitle.textContent = 'Rejoindre un Couple';
+        $('modal-title').textContent = 'Rejoindre un couple';
     }
 }
 
 function closeModal() {
-    document.getElementById('couple-modal').classList.add('hidden');
-    document.getElementById('modal-error').classList.add('hidden');
-    document.getElementById('create-couple-form').reset();
-    document.getElementById('join-couple-form').reset();
+    $('couple-modal').classList.add('hidden');
+    $('modal-error').classList.add('hidden');
+    $('create-couple-form').reset();
+    $('join-couple-form').reset();
 }
 
 function showModalError(message) {
-    const errorEl = document.getElementById('modal-error');
-    errorEl.textContent = message;
-    errorEl.classList.remove('hidden');
+    const el = $('modal-error');
+    el.textContent = message;
+    el.classList.remove('hidden');
+}
+
+// ============================================
+// NETTOYAGE
+// ============================================
+function cleanupTimers() {
+    clearInterval(AppState.timerInterval);
+    clearInterval(AppState.blitzTimer);
+}
+
+function cleanupGame() {
+    cleanupTimers();
+    closeChannels();
+    AppState.gameSession = null;
+    AppState.currentQuestion = null;
+    AppState.questions = [];
+    AppState.currentRound = 0;
+    AppState.advancing = false;
+    AppState.answeredThisRound = false;
+    AppState.blitzEnded = false;
+}
+
+function resetAppState() {
+    cleanupGame();
+    AppState.user = null;
+    AppState.profile = null;
+    AppState.couple = null;
+    AppState.selectedPack = null;
 }
 
 // ============================================
 // ÉCOUTEURS D'ÉVÉNEMENTS
 // ============================================
 function setupEventListeners() {
-    // Navigation entre formulaires auth
-    document.getElementById('show-signup').addEventListener('click', (e) => {
+    // --- Navigation auth ---
+    $('show-signup').addEventListener('click', (e) => {
         e.preventDefault();
-        document.getElementById('login-form').classList.add('hidden');
-        document.getElementById('signup-form').classList.remove('hidden');
+        $('login-form').classList.add('hidden');
+        $('signup-form').classList.remove('hidden');
+        $('auth-error').classList.add('hidden');
     });
-    
-    document.getElementById('show-login').addEventListener('click', (e) => {
+    $('show-login').addEventListener('click', (e) => {
         e.preventDefault();
-        document.getElementById('signup-form').classList.add('hidden');
-        document.getElementById('login-form').classList.remove('hidden');
+        $('signup-form').classList.add('hidden');
+        $('login-form').classList.remove('hidden');
+        $('auth-error').classList.add('hidden');
     });
-    
-    // Connexion
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
+
+    // --- Auth ---
+    $('login-form').addEventListener('submit', (e) => {
         e.preventDefault();
-        const email = document.getElementById('login-email').value;
-        const password = document.getElementById('login-password').value;
-        await handleLogin(email, password);
+        handleLogin($('login-email').value, $('login-password').value);
     });
-    
-    // Inscription
-    document.getElementById('signup-form').addEventListener('submit', async (e) => {
+    $('signup-form').addEventListener('submit', (e) => {
         e.preventDefault();
-        const email = document.getElementById('signup-email').value;
-        const password = document.getElementById('signup-password').value;
-        await handleSignup(email, password);
+        handleSignup($('signup-email').value, $('signup-password').value);
     });
-    
-    // Déconnexion
-    document.getElementById('logout-btn').addEventListener('click', handleLogout);
-    
-    // Création couple
-    document.getElementById('create-couple-btn').addEventListener('click', () => openModal('create'));
-    document.getElementById('cancel-create-btn').addEventListener('click', closeModal);
-    document.getElementById('create-couple-form').addEventListener('submit', async (e) => {
+    $('logout-btn').addEventListener('click', handleLogout);
+
+    // --- Couple ---
+    $('create-couple-btn').addEventListener('click', () => openModal('create'));
+    $('join-couple-btn').addEventListener('click', () => openModal('join'));
+    $('cancel-create-btn').addEventListener('click', closeModal);
+    $('cancel-join-btn').addEventListener('click', closeModal);
+    $('create-couple-form').addEventListener('submit', (e) => {
         e.preventDefault();
-        const name = document.getElementById('couple-name-input').value;
-        await createCouple(name);
+        createCouple($('couple-name-input').value.trim());
     });
-    
-    // Rejoindre couple
-    document.getElementById('join-couple-btn').addEventListener('click', () => openModal('join'));
-    document.getElementById('cancel-join-btn').addEventListener('click', closeModal);
-    document.getElementById('join-couple-form').addEventListener('submit', async (e) => {
+    $('join-couple-form').addEventListener('submit', (e) => {
         e.preventDefault();
-        const code = document.getElementById('invite-code-input').value.trim();
-        await joinCouple(code);
+        joinCouple($('invite-code-input').value.trim());
     });
-    
-    // Copier code
-    document.getElementById('copy-code-btn').addEventListener('click', copyInviteCode);
-    
-    // Modes de jeu
-    document.querySelectorAll('.game-mode-card').forEach(card => {
-        card.addEventListener('click', () => {
-            startGame(card.dataset.mode);
-        });
+    $('copy-code-btn').addEventListener('click', copyInviteCode);
+
+    // --- Modes de jeu ---
+    document.querySelectorAll('.game-mode-card').forEach((card) => {
+        card.addEventListener('click', () => startGame(card.dataset.mode));
     });
-    
-    // Retour accueil
-    document.getElementById('back-home-btn').addEventListener('click', () => {
-        clearInterval(AppState.timer);
+
+    // --- Retour accueil ---
+    $('back-home-btn').addEventListener('click', async () => {
+        // Si l'hôte quitte, annuler la session pour ne pas la réutiliser.
+        if (AppState.isHost && AppState.gameSession && AppState.gameSession.status === 'active') {
+            await AppState.supabase
+                .from('game_sessions')
+                .update({ status: 'cancelled' })
+                .eq('id', AppState.gameSession.id);
+        }
+        cleanupGame();
         showScreen('home-screen');
     });
-    
-    // Chat
-    document.getElementById('toggle-chat-btn').addEventListener('click', toggleChat);
-    document.getElementById('close-chat-btn').addEventListener('click', toggleChat);
-    document.getElementById('chat-form').addEventListener('submit', async (e) => {
+
+    // --- Fermer les résultats ---
+    $('close-results-btn').addEventListener('click', () => {
+        $('results-overlay').classList.add('hidden');
+        cleanupGame();
+        showScreen('home-screen');
+    });
+
+    // --- Chat ---
+    $('toggle-chat-btn').addEventListener('click', toggleChat);
+    $('close-chat-btn').addEventListener('click', toggleChat);
+    $('chat-form').addEventListener('submit', (e) => {
         e.preventDefault();
-        const input = document.getElementById('chat-input');
-        await sendChatMessage(input.value);
+        const input = $('chat-input');
+        sendChatMessage(input.value);
     });
-    
-    // Emojis
-    document.querySelectorAll('.emoji-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            sendEmoji(btn.dataset.emoji);
-        });
+
+    // --- Emojis ---
+    document.querySelectorAll('.emoji-btn').forEach((btn) => {
+        btn.addEventListener('click', () => sendEmoji(btn.dataset.emoji));
     });
-    
-    // Avertissement H125
-    document.getElementById('dismiss-warning').addEventListener('click', () => {
-        document.getElementById('h125-warning').classList.add('hidden');
+
+    // --- Avertissement H125 ---
+    $('dismiss-warning').addEventListener('click', () => {
+        $('h125-warning').classList.add('hidden');
     });
-    
-    // Service Worker pour PWA
+
+    // --- Service Worker (PWA) ---
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js').catch(() => {
-            console.log('Service Worker non enregistré (fichier sw.js manquant)');
+        navigator.serviceWorker.register('./sw.js').catch(() => {
+            console.log('Service Worker non enregistré.');
         });
     }
 }
 
 // ============================================
-// UTILITAIRES
+// ERREURS
 // ============================================
-function showError(message) {
-    alert(message);
-}
-
 function showAuthError(message) {
-    const errorEl = document.getElementById('auth-error');
-    errorEl.textContent = message;
-    errorEl.classList.remove('hidden');
-    setTimeout(() => errorEl.classList.add('hidden'), 5000);
+    const el = $('auth-error');
+    el.textContent = message;
+    el.classList.remove('hidden');
+    clearTimeout(showAuthError._t);
+    showAuthError._t = setTimeout(() => el.classList.add('hidden'), 6000);
 }
-
-function updateUI() {
-    loadPacks();
-    updateCoupleUI();
-}
-
-// Ajouter la fonction RPC pour update_player_score si elle n'existe pas dans le schema
-// Cette fonction est appelée mais peut ne pas exister, donc on gère l'erreur
-console.log('DuoQuest - Prêt à jouer ! 🎮');

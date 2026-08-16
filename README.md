@@ -43,22 +43,25 @@ duoquest/
 ├── app.js                  # Logique JavaScript vanilla
 ├── config.js               # Configuration Supabase (à remplir)
 ├── manifest.json           # Manifest PWA pour installation Android
+├── sw.js                   # Service worker (cache du shell statique)
 ├── README.md               # Ce fichier
 ├── supabase/
 │   ├── schema.sql          # Schéma de base de données complet
-│   └── seed.sql            # Données initiales (packs et questions)
+│   ├── seed.sql            # Données initiales (packs et questions)
+│   └── migration_v2.sql    # Migration pour une installation déjà en place
 └── icons/
-    ├── icon-192.png        # Icône PWA 192x192 (à ajouter)
-    └── icon-512.png        # Icône PWA 512x512 (à ajouter)
+    ├── icon-192.png        # Icône PWA 192x192 (placeholder fourni)
+    └── icon-512.png        # Icône PWA 512x512 (placeholder fourni)
 ```
 
 ---
 
 ## 🚀 Installation et Configuration
 
-> ✅ **Supabase déjà configuré et application déployée !**
-> 
-> Les étapes ci-dessous sont fournies à titre de référence pour la documentation du projet.
+> 🔁 **Mise à jour d'une installation existante** : si vous avez déjà exécuté
+> `schema.sql` et `seed.sql`, exécutez uniquement `supabase/migration_v2.sql`
+> (il ajoute la fonction de score et les policies complémentaires).
+> `seed.sql` n'a pas besoin d'être ré-exécuté.
 
 ### Étape 1 : Créer un projet Supabase
 
@@ -135,9 +138,30 @@ Pour tester plus rapidement sans vérifier les emails :
 
 ## 🌐 Déploiement
 
-> ✅ **Application déjà déployée !**
-> 
-> Les options ci-dessous sont fournies à titre de référence.
+DuoQuest est un site **100 % statique** (HTML, CSS, JS), il se déploie donc sur n'importe quel hébergeur statique.
+
+### Option A : Netlify
+
+1. Poussez le projet sur un dépôt GitHub/GitLab/Bitbucket.
+2. Sur [netlify.com](https://netlify.com), cliquez sur **Add new site → Import an existing project**.
+3. Connectez votre dépôt.
+4. Laissez **Build command** vide et définissez **Publish directory** sur `.` (la racine).
+5. Cliquez sur **Deploy site**. L'URL fournie (ex. `https://xxx.netlify.app`) est votre application.
+
+### Option B : Vercel
+
+1. Sur [vercel.com](https://vercel.com), cliquez sur **Add New → Project** et importez votre dépôt.
+2. Choisissez **Framework Preset : Other** (aucun build requis).
+3. Laissez la commande de build vide ; le répertoire de sortie est la racine.
+4. Cliquez sur **Deploy**. L'URL fournie (ex. `https://xxx.vercel.app`) est votre application.
+
+### Option C : GitHub Pages / Cloudflare Pages
+
+- **GitHub Pages** : Settings → Pages → source = branche principale / dossier racine.
+- **Cloudflare Pages** : New Project → connectez le dépôt → aucun build → répertoire racine.
+
+> ⚠️ Après déploiement, pensez à mettre l'URL déployée dans les **Site URL** de Supabase
+> (Authentication → URL Configuration) pour un bon fonctionnement des redirections d'auth.
 
 ## 📲 Installation sur Android (PWA)
 
@@ -157,13 +181,10 @@ Pour tester plus rapidement sans vérifier les emails :
 
 ### Personnalisation des icônes
 
-Pour une meilleure expérience PWA, ajoutez vos propres icônes :
+Des icônes **placeholder** sont déjà fournies dans `icons/` (`icon-192.png` et `icon-512.png`). Pour personnaliser :
 
-1. Créez un dossier `icons/` à la racine du projet
-2. Ajoutez deux images PNG :
-   - `icon-192.png` (192x192 pixels)
-   - `icon-512.png` (512x512 pixels)
-3. Redéployez l'application
+1. Remplacez ces deux images par vos propres PNG (mêmes noms et mêmes tailles : 192×192 et 512×512)
+2. Redéployez l'application
 
 **Conseil** : Utilisez un générateur d'icônes PWA comme [https://realfavicongenerator.net](https://realfavicongenerator.net)
 
@@ -331,7 +352,7 @@ Pour activer les logs détaillés dans Supabase :
 
 ## 🎉 Prêt à jouer !
 
-Votre application DuoQuest est **déjà configurée et déployée** !
+Votre application DuoQuest est **prête à être configurée et déployée** !
 
 Pour commencer :
 1. Partagez l'URL de l'application avec votre partenaire

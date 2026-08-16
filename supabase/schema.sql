@@ -288,6 +288,29 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ============================================
+-- FONCTION: update_player_score
+-- Incrémente le score et les statistiques d'un joueur.
+-- SECURITY DEFINER mais restreinte à auth.uid() :
+-- un utilisateur ne peut mettre à jour QUE sa propre ligne joueur.
+-- ============================================
+CREATE OR REPLACE FUNCTION public.update_player_score(
+    p_player_id UUID,
+    p_points INTEGER,
+    p_is_correct BOOLEAN
+)
+RETURNS void AS $$
+BEGIN
+    UPDATE public.session_players
+    SET score = COALESCE(score, 0) + p_points,
+        answers_count = COALESCE(answers_count, 0) + 1,
+        correct_answers_count = COALESCE(correct_answers_count, 0)
+            + CASE WHEN p_is_correct THEN 1 ELSE 0 END
+    WHERE id = p_player_id
+      AND user_id = auth.uid();
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ============================================
 -- ROW LEVEL SECURITY (RLS)
 -- ============================================
 
@@ -310,6 +333,21 @@ ALTER TABLE public.emoji_reactions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can view own profile"
 ON public.profiles FOR SELECT
 USING (auth.uid() = id);
+
+-- Les membres d'un même couple peuvent lire leurs profils respectifs
+-- (nécessaire pour afficher le nom du partenaire dans le chat et les scores)
+CREATE POLICY "Couple members can view each other's profile"
+ON public.profiles FOR SELECT
+USING (
+    auth.uid() = id
+    OR EXISTS (
+        SELECT 1
+        FROM public.couple_members me
+        JOIN public.couple_members partner ON me.couple_id = partner.couple_id
+        WHERE me.user_id = auth.uid()
+          AND partner.user_id = profiles.id
+    )
+);
 
 -- Un utilisateur peut mettre à jour son propre profil
 CREATE POLICY "Users can update own profile"
@@ -358,7 +396,7 @@ WITH CHECK (auth.uid() = user_id);
 -- Tout utilisateur authentifié peut lire les packs actifs
 CREATE POLICY "Users can view active packs"
 ON public.packs FOR SELECT
-USING (is_active = TRUE);
+USING (auth.uid() IS NOT NULL AND is_active = TRUE);
 
 -- ============================================
 -- POLICIES: questions
@@ -366,7 +404,7 @@ USING (is_active = TRUE);
 -- Tout utilisateur authentifié peut lire les questions actives
 CREATE POLICY "Users can view active questions"
 ON public.questions FOR SELECT
-USING (status = 'active');
+USING (auth.uid() IS NOT NULL AND status = 'active');
 
 -- ============================================
 -- POLICIES: game_sessions
@@ -432,7 +470,8 @@ WITH CHECK (
     EXISTS (
         SELECT 1 FROM public.session_players sp
         WHERE sp.id = player_id
-        AND sp.user_id = auth.uid()
+          AND sp.user_id = auth.uid()
+          AND sp.session_id = session_id
     )
 );
 
@@ -520,13 +559,24 @@ FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- ============================================
 -- Publication pour Supabase Realtime
+-- (idempotent : n'ajoute une table que si elle n'y est pas déjà)
 -- ============================================
--- Activer Realtime pour les tables qui doivent être synchronisées en temps réel
-ALTER PUBLICATION supabase_realtime ADD TABLE public.game_sessions;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.session_players;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.answers;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_messages;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.emoji_reactions;
+DO $$
+DECLARE
+    tbl TEXT;
+    tables TEXT[] := ARRAY['game_sessions','session_players','answers','chat_messages','emoji_reactions'];
+BEGIN
+    FOREACH tbl IN ARRAY tables LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_publication_tables
+            WHERE pubname = 'supabase_realtime'
+              AND schemaname = 'public'
+              AND tablename = tbl
+        ) THEN
+            EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', tbl);
+        END IF;
+    END LOOP;
+END $$;
 
 -- Message de confirmation
 DO $$
